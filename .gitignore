@@ -15,8 +15,6 @@ build/
 venv/
 env/
 
-# ChromaDB — persisted vector store (rebuilt via --setup-rag)
-mcp_servers/rag_server/chroma_db/
 
 # Testing
 .pytest_cache/
