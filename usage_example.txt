@@ -1,0 +1,501 @@
+USAGE EXAMPLES: CLI AI CODING ASSISTANT
+========================================
+This document is updated at the end of each completed phase.
+Each section shows how to run and verify that phase's functionality.
+
+
+PHASE 1 — PROJECT SETUP
+------------------------
+Status: COMPLETE
+
+1. Create and activate virtual environment
+   ------------------------------------------
+   python -m venv venv
+
+   # Windows
+   venv\Scripts\activate
+
+   # Mac/Linux
+   source venv/bin/activate
+
+2. Install project dependencies
+   ------------------------------------------
+   pip install -e .
+
+   Expected output: Successfully installed coding-assistant-0.1.0 and all
+   dependencies (langchain, langchain-groq, mcp, rich, typer, chromadb, etc.)
+
+3. Set up environment variables
+   ------------------------------------------
+   # Copy the example file and fill in your API keys
+   cp .env.example .env
+
+   # Open .env and set at minimum:
+   GROQ_API_KEY=your_groq_api_key_here
+   OPENAI_API_KEY=your_openai_api_key_here
+
+4. Verify config loads correctly
+   ------------------------------------------
+   python -c "from config import config; print(config)"
+
+   Expected output: Config object printed with provider=groq,
+   model=llama-3.3-70b-versatile, max_turns=20, auto_execute=False
+
+5. Verify environment pre-flight checks
+   ------------------------------------------
+   python -c "from config import config; warnings = config.validate_environment(); print(warnings if warnings else 'All checks passed')"
+
+   Expected output (if keys + tools are set up):
+     All checks passed
+
+   Expected output (if a key is missing):
+     ["No API key found for provider 'groq'. Set GROQ_API_KEY in your .env file."]
+
+6. Verify Node.js, npx, and Ollama are available
+   ------------------------------------------
+   node --version    # Expected: v24.x.x or higher
+   npx --version     # Expected: 10.x.x or higher
+   ollama --version  # Expected: ollama version is 0.x.x
+
+
+PHASE 2 — DISPLAY LAYER
+------------------------
+Status: COMPLETE
+
+NOTE: Run all display tests with PYTHONUTF8=1 to ensure emoji and
+box-drawing characters render correctly on Windows terminals.
+
+1. Run the full display layer smoke test
+   ------------------------------------------
+   PYTHONUTF8=1 python tests/test_display.py
+
+   Expected output (in order):
+     - Horizontal rule: "Phase 2 — Display Layer Smoke Test"
+     - Welcome banner panel (cyan border) with provider/model/turn config
+     - "You ›" styled user message
+     - Streaming assistant response (updates in-place in a real terminal)
+     - Horizontal rule divider
+     - Yellow "🔧 Tool Call" panel with JSON-highlighted args
+     - Green "✅ Tool Result" panel (success case)
+     - Red "❌ Tool Result" panel (failure case)
+     - Yellow turn warning line
+     - Yellow "🛑 Turn Limit Reached" panel
+     - Red "❌ Error" panel
+     - Animated dots spinner for ~2 seconds
+     - Green "✔  Task complete." line
+     - Horizontal rule: "All display components rendered successfully"
+
+2. Verify individual components can be imported cleanly
+   ------------------------------------------
+   python -c "from display import print_welcome_banner, print_tool_call, print_error; print('imports OK')"
+
+   Expected output:
+     imports OK
+
+3. Verify the module-level console is accessible
+   ------------------------------------------
+   python -c "from display import console; print(type(console))"
+
+   Expected output:
+     <class 'rich.console.Console'>
+
+4. Windows-specific note
+   ------------------------------------------
+   The display layer forces UTF-8 on stdout/stderr at import time for
+   Windows compatibility. If emoji still fail to render, prefix your
+   command with PYTHONUTF8=1 or set it in your shell profile:
+
+   # PowerShell
+   $env:PYTHONUTF8 = "1"
+
+   # Command Prompt
+   set PYTHONUTF8=1
+
+
+PHASE 3 — PROVIDER FACTORY
+---------------------------
+Status: COMPLETE
+
+NOTE: Prefix all commands with PYTHONUTF8=1 on Windows.
+
+1. Run the full provider factory smoke test
+   ------------------------------------------
+   PYTHONUTF8=1 python tests/test_providers.py
+
+   Expected output (all checks marked with ✔):
+     - Supported model table for groq / openai / ollama
+     - ✔ ValueError for unknown provider 'anthropic'
+     - ✔ ValueError for missing GROQ_API_KEY
+     - ✔ groq       → ChatGroq
+     - ✔ openai     → ChatOpenAI
+     - ✔ ollama     → ChatOllama
+     - ✔ get_model_from_config → ChatGroq (provider=groq, model=llama-3.3-70b-versatile)
+     - ✔ bind_tools([]) → RunnableBinding
+     - ✔ Live Groq stream → 'provider test passed'
+
+2. Verify imports are clean
+   ------------------------------------------
+   python -c "from providers import get_model, get_model_from_config, SUPPORTED_MODELS; print('imports OK')"
+
+   Expected output:
+     imports OK
+
+3. Instantiate a model manually
+   ------------------------------------------
+   python -c "
+   from providers import get_model
+   from config import config
+   m = get_model('groq', api_key=config.groq_api_key)
+   print(type(m).__name__)
+   "
+
+   Expected output:
+     ChatGroq
+
+4. List all supported models
+   ------------------------------------------
+   python -c "
+   from providers import SUPPORTED_MODELS, DEFAULT_MODELS
+   for p, models in SUPPORTED_MODELS.items():
+       print(p, '(default:', DEFAULT_MODELS[p] + ')')
+       for m in models:
+           print(' -', m)
+   "
+
+5. Known warning (harmless)
+   ------------------------------------------
+   Python 3.14 triggers a Pydantic V1 deprecation warning from LangChain:
+
+     UserWarning: Core Pydantic V1 functionality isn't compatible with
+     Python 3.14 or greater.
+
+   This is an upstream LangChain issue and does not affect streaming,
+   tool calling, or any other functionality in this project.
+
+
+PHASE 4 — MCP CLIENT & TOOL ADAPTER
+-------------------------------------
+Status: COMPLETE
+
+NOTE: Our local package was renamed from mcp/ to mcp_client/ to avoid a
+namespace collision with the installed mcp Python SDK. All imports use
+mcp_client.* for our code and mcp.* for the installed SDK.
+
+1. Run the full MCP client & tool adapter smoke test
+   ------------------------------------------
+   PYTHONUTF8=1 python tests/test_mcp.py
+
+   Expected output (all checks marked with ✔):
+     - ✔ get_server_configs returned 3 configs (filesystem, context7, rag)
+     - ✔ Connected to: ['filesystem']
+     - ✔ 14 tool(s) loaded from filesystem server
+     - ✔ build_langchain_tools → 14 BaseTool(s) with correct schema fields
+     - ✔ list_directory real call returned workspace file listing
+     - ✔ model.bind_tools(14 tools) → RunnableBinding
+
+2. Verify imports are clean
+   ------------------------------------------
+   python -c "from mcp_client import MCPClient, get_server_configs, build_langchain_tools; print('imports OK')"
+
+   Expected output:
+     imports OK
+
+3. Inspect server configs manually
+   ------------------------------------------
+   python -c "
+   from mcp_client import get_server_configs
+   from config import config
+   for cfg in get_server_configs(config.workspace):
+       print(cfg.name, '->', cfg.command, cfg.args[:2])
+   "
+
+   Expected output:
+     filesystem -> npx.cmd ['-y', '@modelcontextprotocol/server-filesystem']
+     context7   -> npx.cmd ['-y', '@upstash/context7-mcp']
+     rag        -> python  ['...mcp_servers/rag_server/server.py']
+
+4. Connect and list tools interactively (async)
+   ------------------------------------------
+   python -c "
+   import asyncio
+   from mcp_client import MCPClient, get_server_configs
+   from config import config
+
+   async def main():
+       fs = next(c for c in get_server_configs(config.workspace) if c.name == 'filesystem')
+       async with MCPClient([fs]) as client:
+           tools = client.list_all_tools()
+           print(f'{len(tools)} tools:', [t.name for t in tools])
+
+   asyncio.run(main())
+   "
+
+5. Known issue resolved
+   ------------------------------------------
+   First run failed with:
+     ImportError: cannot import name 'ClientSession' from partially
+     initialized module 'mcp' (circular import)
+
+   Root cause: local mcp/ directory shadowed the installed mcp SDK.
+   Fix applied: renamed mcp/ → mcp_client/ in all files and pyproject.toml.
+
+
+PHASE 5 — CUSTOM RAG MCP SERVER
+---------------------------------
+Status: COMPLETE
+
+NOTE: Run once before using the assistant. Requires Ollama + nomic-embed-text.
+
+1. Pull the embedding model (one-time)
+   ------------------------------------------
+   ollama pull nomic-embed-text
+
+   Expected output:
+     pulling manifest... done
+
+2. Build the ChromaDB index (one-time setup)
+   ------------------------------------------
+   python -m mcp_servers.rag_server.indexer
+
+   Expected output:
+     [indexer] Loading 18 documentation pages...
+       [1/18] Loaded: https://python.langchain.com/docs/introduction/  (3341 chars)
+       ...
+       [18/18] Loaded: https://python.langchain.com/docs/tutorials/chatbot/  (32355 chars)
+     [indexer] Total documents loaded: 18
+     [indexer] Applying semantic chunking...
+               (this embeds every sentence — may take a few minutes)
+     [indexer] Produced 115 semantic chunks
+     [indexer] Embedding 115 chunks and storing in ChromaDB...
+     [indexer] ✔ Indexing complete.
+               115 chunks stored in .../mcp_servers/rag_server/chroma_db
+
+3. Run the full RAG MCP server smoke test
+   ------------------------------------------
+   python tests/test_rag.py
+
+   Expected output (all 7 checks marked with ✔):
+     ✔  Index is READY — 115 chunks in 'langchain_docs'
+     ✔  retrieve() returned 3 chunk(s) for: 'What is LCEL and how does it work?'
+     ✔  retrieve_with_scores() returned 3 result(s)
+     ✔  Connected to RAG server: ['rag']
+     ✔  2 tool(s) exposed by RAG server
+     ✔  search_langchain_docs returned 786 chars
+     ✔  get_rag_status call succeeded
+
+4. Query the retriever directly (optional)
+   ------------------------------------------
+   python -c "
+   import sys; sys.path.insert(0, '.')
+   from mcp_servers.rag_server.retriever import retrieve
+   chunks = retrieve('How does LCEL work?', k=2)
+   for i, c in enumerate(chunks, 1):
+       print(f'[{i}] {c[:200]}')
+   "
+
+5. Check index status
+   ------------------------------------------
+   python -c "
+   import sys; sys.path.insert(0, '.')
+   from mcp_servers.rag_server.retriever import get_collection_stats
+   print(get_collection_stats())
+   "
+
+   Expected output:
+     {'status': 'ready', 'count': 115, 'collection': 'langchain_docs', 'path': '...'}
+
+6. Re-index if needed (force rebuild)
+   ------------------------------------------
+   python -m mcp_servers.rag_server.indexer --force
+
+7. Known issues resolved
+   ------------------------------------------
+   - LangChain docs migrated from Docusaurus to Mintlify: updated CSS selector
+     from theme-doc-markdown to regex matching the 'prose' class.
+   - ChromaDB startup messages corrupt the MCP JSON-RPC stream if imported
+     lazily inside functions: fixed by importing langchain_chroma and
+     langchain_ollama at module level in retriever.py so they load before
+     stdio_server() claims stdout.
+
+
+PHASE 6 — AGENTIC LOOP
+-----------------------
+Status: COMPLETE
+
+1. Run the full agentic loop smoke test
+   ------------------------------------------
+   python tests/test_agent.py
+
+   Expected output (all checks marked with ✔):
+     ✔  AgentLoop, MessageHistory, SYSTEM_PROMPT imported
+     ✔  MessageHistory: add_human / add_ai / add_tool_result / clear all pass
+     ✔  AgentLoop created with 14 tool(s)
+     ✔  Run completed without error  (single-turn, no tool call)
+     ✔  Tool-calling run completed without error  (list_directory called)
+     ✔  max_turns=1 loop terminated correctly
+
+2. Use AgentLoop directly in Python
+   ------------------------------------------
+   import asyncio
+   from config import config
+   from providers import get_model_from_config
+   from mcp_client import MCPClient, get_server_configs, build_langchain_tools
+   from agent import AgentLoop
+
+   async def main():
+       model = get_model_from_config(config)
+       configs = get_server_configs(config.workspace)
+       async with MCPClient(configs) as client:
+           tools = build_langchain_tools(client.list_all_tools(), client)
+           loop = AgentLoop(model=model, tools=tools, max_turns=20, auto_execute=False)
+           await loop.run("Summarise the config.py file")
+
+   asyncio.run(main())
+
+3. Key behaviours
+   ------------------------------------------
+   Streaming      : LLM tokens display in-place with Rich Live as they arrive
+   Tool call      : Yellow panel shows tool name + JSON args before execution
+   Confirmation   : y/n prompt per tool call when auto_execute=False
+   Tool result    : Green (success) or red (error) panel with truncated output
+   Turn warning   : Fires at 75% of max_turns (e.g. turn 15/20)
+   Turn limit     : "🛑 Turn Limit Reached" panel stops runaway loops
+   History        : Full conversation carried across turns; auto-trims at 80 msgs
+   Multi-task     : Call loop.clear_history() between unrelated tasks
+
+4. Controlling the loop
+   ------------------------------------------
+   # Auto-execute all tools (no prompts)
+   loop = AgentLoop(model, tools, max_turns=20, auto_execute=True)
+
+   # Tight budget for cheap exploration tasks
+   loop = AgentLoop(model, tools, max_turns=5, auto_execute=True)
+
+   # Reset history between tasks
+   await loop.run("Task A")
+   loop.clear_history()
+   await loop.run("Task B")
+
+
+PHASE 7 — CLI ENTRY POINT
+--------------------------
+Status: COMPLETE
+
+Entry point : main.py  (also available as `assistant` after pip install -e .)
+All commands below work equivalently with `python main.py` or `assistant`.
+
+1. Show help
+   ------------------------------------------
+   python main.py --help
+
+   Expected output:
+     Usage: main.py [OPTIONS] [TASK]
+
+       Autonomous AI coding assistant — reads, edits, and executes code for you.
+
+     Arguments:
+       [TASK]  Task to run immediately (omit for interactive REPL mode).
+
+     Options:
+       --auto            Auto-execute tools without asking for confirmation.
+       --max-turns INT   Hard limit on agentic loop iterations  [1<=x<=100]
+       --provider TEXT   LLM provider: groq | openai | ollama
+       --model TEXT      Model name override (e.g. gpt-4o)
+       --workspace TEXT  Workspace directory the filesystem server may access
+       --setup-rag       Build (or rebuild) the LangChain docs index and exit
+       --help            Show this message and exit.
+
+2. Single-task mode (run one task and exit)
+   ------------------------------------------
+   python main.py "Reply with exactly the word PONG and nothing else."
+
+   Expected output:
+     - Welcome banner (provider / model / max-turns / auto-exec)
+     - "Connecting to 3 MCP server(s)…" spinner
+     - "Connected: ['filesystem', 'context7', 'rag']  (18 tools)"
+     - "↳  12 tools active after filtering"
+     - Assistant response: PONG
+     - "✔  Task complete."
+     - "Shutting down MCP servers…" spinner
+
+3. Interactive REPL mode
+   ------------------------------------------
+   python main.py
+
+   Then type tasks at the ">" prompt.  Built-in commands:
+     help   — show command list
+     clear  — wipe conversation history (start a fresh context)
+     exit   — quit (also: quit, q, :q, or Ctrl+C)
+
+   Example session:
+     > List the files in the current directory
+     [Tool call panel for list_directory]
+     Execute this tool? [y/n]: y
+     [Tool result panel with file listing]
+     Assistant  The directory contains: agent/, config.py, main.py, ...
+     ✔  Task complete.
+
+     > exit
+     Goodbye.
+
+4. Auto-execute mode (skip all confirmation prompts)
+   ------------------------------------------
+   python main.py --auto "List the files in the current directory"
+
+   All tool calls execute immediately without asking y/n.
+
+5. Provider and model overrides
+   ------------------------------------------
+   # Use OpenAI GPT-4o
+   python main.py --provider openai --model gpt-4o "Explain config.py"
+
+   # Use local Ollama (no API key required)
+   python main.py --provider ollama --model llama3.2 "List files"
+
+   # Tight turn budget for quick tasks
+   python main.py --max-turns 5 "What does main.py do?"
+
+6. Restrict workspace (filesystem server access)
+   ------------------------------------------
+   # Only allow the agent to read/write inside ./src
+   python main.py --workspace ./src "Refactor the login module"
+
+7. Build the RAG index and exit
+   ------------------------------------------
+   python main.py --setup-rag
+
+   Expected output:
+     Setting up LangChain documentation index…
+     [same as running python -m mcp_servers.rag_server.indexer]
+
+8. Tool filtering (Groq compatibility)
+   ------------------------------------------
+   The `@modelcontextprotocol/server-filesystem` (current version) exposes 14
+   tools, for a total of 18 across all three servers.  Groq's llama models
+   reliably fail tool-call generation above ~12–14 tools ("Failed to call a
+   function" error), so main.py filters out 6 redundant/low-value tools:
+
+     Removed                   Reason
+     read_text_file            duplicates read_file
+     read_media_file           LLM cannot interpret binary media
+     read_multiple_files       model can call read_file in sequence
+     list_directory_with_sizes duplicates list_directory
+     get_file_info             covered by list_directory
+     get_rag_status            maintenance tool, not task-relevant
+
+   Result: 12 tools passed to the model (shown as "↳  12 tools active").
+
+9. Error handling
+   ------------------------------------------
+   - If a provider API call fails, the REPL prints a red error panel and
+     returns to the ">" prompt (conversation history is cleared).
+   - MCP server startup failures print an error and exit with code 1.
+   - Ctrl+C at the ">" prompt exits cleanly after shutting down MCP servers.
+   - Ctrl+C during a running task interrupts it and clears history.
+
+10. Known issues resolved
+    ------------------------------------------
+    - Config.get_api_key_for_provider() takes no arguments: replaced with a
+      local _key_map dict lookup in _async_session().
+    - Groq "Failed to call a function" crash: fixed by (a) filtering to 12
+      tools and (b) passing parallel_tool_calls=False to bind_tools().

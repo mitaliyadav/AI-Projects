@@ -1,0 +1,59 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "coding-assistant"
+version = "0.1.0"
+description = "A command-line AI coding assistant powered by LangChain and MCP"
+requires-python = ">=3.11"
+dependencies = [
+    # LangChain core
+    "langchain>=0.3.14",
+    "langchain-core>=0.3.28",
+    "langchain-community>=0.3.14",
+    "langchain-experimental>=0.3.4",
+
+    # LangChain providers
+    "langchain-groq>=0.2.3",
+    "langchain-openai>=0.2.14",
+    "langchain-ollama>=0.2.3",
+
+    # Vector store
+    "langchain-chroma>=0.1.4",
+    "chromadb>=0.5.23",
+
+    # MCP Python SDK
+    "mcp>=1.3.0",
+
+    # CLI & display
+    "typer>=0.15.1",
+    "rich>=13.9.4",
+
+    # Config & env
+    "python-dotenv>=1.0.1",
+    "pydantic>=2.10.4",
+    "pydantic-settings>=2.7.0",
+
+    # Utilities
+    "httpx>=0.28.1",
+    "anyio>=4.7.0",
+]
+
+[project.scripts]
+assistant = "main:app"
+
+[tool.hatch.build.targets.wheel]
+packages = [
+    "agent",
+    "providers",
+    "mcp_client",
+    "display",
+    "mcp_servers",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3.4",
+    "pytest-asyncio>=0.25.0",
+]

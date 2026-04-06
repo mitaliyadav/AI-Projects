@@ -1,0 +1,234 @@
+IMPLEMENTATION PLAN: CLI AI CODING ASSISTANT
+============================================
+
+TECH STACK
+----------
+Language         : Python 3.11+
+Primary LLM      : Groq (llama-3.3-70b-versatile)
+Secondary        : OpenAI, Ollama (via provider flag)
+LLM Abstraction  : LangChain (langchain-groq, langchain-openai, langchain-ollama)
+MCP Client       : mcp Python SDK (stdio transport)
+RAG Chunking     : SemanticChunker (langchain_experimental)
+Embeddings       : Ollama local model (nomic-embed-text)
+Vector DB        : ChromaDB (persisted to disk, set up once)
+CLI              : typer
+Display          : rich
+Config           : python-dotenv
+
+
+PROJECT STRUCTURE
+-----------------
+coding-assistant/
+├── main.py                        # CLI entry point
+├── config.py                      # Env + config loading
+├── pyproject.toml                 # Dependencies
+├── .env.example                   # Template for API keys
+│
+├── agent/
+│   ├── __init__.py
+│   ├── loop.py                    # Agentic loop (max turns, streaming)
+│   └── history.py                 # Message history management
+│
+├── providers/
+│   ├── __init__.py
+│   └── factory.py                 # ChatModel factory (Groq/OpenAI/Ollama)
+│
+├── mcp_client/                        # NOTE: renamed from mcp/ to avoid
+│   ├── __init__.py                    # namespace collision with installed mcp pkg
+│   ├── client.py                  # MCP client — connects to all servers, lists tools
+│   ├── tool_adapter.py            # MCP Tool → LangChain BaseTool
+│   └── server_configs.py          # Stdio configs for each MCP server
+│
+├── display/
+│   ├── __init__.py
+│   └── console.py                 # Rich panels, streaming, tool indicators
+│
+└── mcp_servers/
+    └── rag_server/
+        ├── __init__.py
+        ├── server.py              # MCP server exposing RAG as a tool
+        ├── indexer.py             # One-time: load → chunk → embed → persist
+        ├── retriever.py           # Query ChromaDB, return top-k chunks
+        └── chroma_db/             # Persisted vector store (git-ignored)
+
+
+PHASE 1 — PROJECT SETUP
+------------------------
+Goals: skeleton, dependencies, config
+
+- Create directory structure above
+- pyproject.toml with all dependencies pinned
+- .env.example with GROQ_API_KEY, OPENAI_API_KEY, CONTEXT7_API_KEY
+- config.py — loads .env, exposes typed config object with:
+    - provider       (default: groq)
+    - model          (default: llama-3.3-70b-versatile)
+    - max_turns      (default: 20)
+    - auto_execute   (default: False)
+- Verify Node.js + npx available (required for filesystem MCP server)
+
+
+PHASE 2 — DISPLAY LAYER
+------------------------
+Goals: Rich console components ready before wiring anything else
+
+display/console.py exposes:
+- print_user_message(text)              — styled user input echo
+- print_assistant_stream(chunks)        — streams LLM tokens with a cursor
+- print_tool_call(name, args)           — Rich panel showing tool name + args
+- print_tool_result(name, result, ok)   — result panel, green/red border
+- print_confirmation_prompt(name, args) — y/n prompt when --auto is off
+- print_status(msg)                     — spinner/status line
+- print_turn_warning(current, max)      — shown when approaching max turns
+- print_error(msg)                      — red error panel
+
+
+PHASE 3 — PROVIDER FACTORY
+---------------------------
+Goals: model-agnostic ChatModel that supports tool binding
+
+providers/factory.py — get_model(provider, model_name) -> BaseChatModel
+- groq   → ChatGroq
+- openai → ChatOpenAI
+- ollama → ChatOllama
+
+All models accessed via model.bind_tools(tools) — LangChain unified interface.
+Streaming supported via .stream() on all providers.
+
+
+PHASE 4 — MCP CLIENT & TOOL ADAPTER
+-------------------------------------
+Goals: connect to all MCP servers, expose their tools as LangChain tools
+
+mcp/server_configs.py — stdio parameters for each server:
+- filesystem  : npx @modelcontextprotocol/server-filesystem <workspace_dir>
+- context7    : npx @upstash/context7-mcp (or equivalent)
+- rag_server  : python mcp_servers/rag_server/server.py
+
+mcp/client.py — MCPClient class:
+- Takes a list of server configs
+- Starts each as a subprocess via mcp.client.stdio.stdio_client
+- Creates a ClientSession per server, calls session.initialize()
+- Calls session.list_tools() on each, collects all tools
+- Exposes get_all_tools() -> list[MCPTool]
+- Handles server disconnection gracefully
+
+mcp_client/tool_adapter.py — adapt_tool(mcp_tool, session) -> BaseTool:
+- Wraps each MCP tool as a LangChain BaseTool subclass
+- _run() calls session.call_tool(name, args) and returns result content
+- Preserves tool name, description, and JSON schema for model binding
+
+
+PHASE 5 — CUSTOM RAG MCP SERVER
+---------------------------------
+Goals: index LangChain docs once, serve retrieval as an MCP tool
+
+5a — Indexer (run once)
+  mcp_servers/rag_server/indexer.py:
+  1. Load LangChain documentation via DirectoryLoader or scraped HTML
+  2. Semantic Chunking via:
+       SemanticChunker(OllamaEmbeddings(model="nomic-embed-text"))
+     Splits by embedding similarity breakpoints rather than fixed token count.
+     Produces contextually coherent chunks.
+  3. Embed each chunk using OllamaEmbeddings
+  4. Store in ChromaDB with persist_directory="mcp_servers/rag_server/chroma_db"
+  5. Exit — subsequent runs skip this step if DB already exists
+
+5b — Retriever
+  mcp_servers/rag_server/retriever.py:
+  - Loads existing ChromaDB
+  - retrieve(query: str, k: int = 5) -> list[str]
+    Embeds query with Ollama, returns top-k chunks
+
+5c — MCP Server
+  mcp_servers/rag_server/server.py:
+  - Uses Python mcp SDK's Server class
+  - Registers one tool: search_langchain_docs(query: str) -> str
+  - Calls retriever.retrieve(query), formats chunks, returns as tool result
+  - Runs via mcp.server.stdio.stdio_server() — speaks stdio transport
+
+
+PHASE 6 — AGENTIC LOOP
+-----------------------
+Goals: the core engine — REPL, max turns, confirmation, streaming
+
+agent/loop.py — AgentLoop class:
+  AgentLoop(model, tools, max_turns, auto_execute, console)
+
+Loop logic per turn:
+  1. Format messages: [system_prompt] + history
+  2. Bind tools to model: model.bind_tools(tools)
+  3. Stream response → display token by token
+  4. If response has no tool_calls → task complete, break
+  5. For each tool_call:
+       a. Display tool name + args (Rich panel)
+       b. If not auto_execute → show confirmation prompt
+            - User declines → append "user declined" to history, continue
+       c. Execute tool → display result
+       d. Append ToolMessage to history
+  6. Increment turn counter
+  7. If turn == max_turns → print warning, break loop
+  8. Continue to next turn
+
+agent/history.py:
+  - Maintains list[BaseMessage]
+  - add_human(), add_ai(), add_tool_result()
+  - clear() for new sessions
+  - Optionally trims old messages if history grows very long
+
+System prompt instructs the model:
+  - It is an autonomous coding assistant
+  - It has tools for filesystem, web context, and code documentation
+  - It should think step by step and complete the task fully
+  - It should stop and report when stuck rather than looping
+
+
+PHASE 7 — CLI ENTRY POINT
+--------------------------
+Goals: wires everything together, handles startup/teardown
+
+main.py using typer:
+
+  python main.py [OPTIONS] [TASK]
+
+  Options:
+    --auto          Auto-execute tools without confirmation
+    --max-turns     Max agentic loop iterations (default: 20)
+    --provider      Model provider: groq | openai | ollama (default: groq)
+    --model         Model name override
+    --workspace     Directory the filesystem server can access (default: cwd)
+    --setup-rag     Run the RAG indexer and exit
+
+Startup sequence:
+  1. Parse args, load config
+  2. Print welcome banner (Rich)
+  3. Start MCP client — connect to all servers (with spinner)
+  4. Load tools from all servers
+  5. Initialize provider/model
+  6. Enter REPL:
+       - Prompt user for task (>)
+       - Pass to AgentLoop.run(task)
+       - Loop until done or max turns hit
+       - Return to prompt for next task
+  7. On exit (Ctrl+C) — gracefully shut down MCP server subprocesses
+
+
+IMPLEMENTATION ORDER
+--------------------
+Phase 1 → Phase 2 → Phase 3 → Phase 4 → Phase 7 (stub) → Phase 6 → Phase 5
+
+Reason: get a working end-to-end loop with filesystem tools first (phases 1-4,
+6, 7), then add the RAG server last since it has an independent setup step.
+
+
+KEY DESIGN DECISIONS
+--------------------
+Custom loop over AgentExecutor   : Full control over streaming, turn counting,
+                                   and per-tool confirmation prompts
+Max turns as hard limit          : Prevents runaway costs; configurable per session
+RAG indexer runs once            : ChromaDB persists to disk; --setup-rag flag
+                                   triggers it on demand
+Semantic chunking over fixed-size: Produces coherent chunks that embed and
+                                   retrieve more accurately
+All MCP servers via stdio        : Consistent transport; no ports to manage
+Groq as primary provider         : Fast inference, generous free tier, supports
+                                   tool calling
