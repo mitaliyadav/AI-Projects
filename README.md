@@ -1,2 +1,2 @@
-# AI-Projects
+# CLI Coding Assistant
 Personal projects
